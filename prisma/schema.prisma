@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// providerId/userId reference rows owned by provider-service and
+// identity-service; no FK across service boundaries — existence is checked
+// over S2S HTTP at write time, reviewer names hydrated at read time.
+model Review {
+  id         String   @id @default(cuid())
+  providerId String
+  userId     String
+  rating     Int
+  comment    String
+  createdAt  DateTime @default(now())
+  photos     ReviewPhoto[]
+
+  @@unique([providerId, userId])
+  @@index([providerId])
+}
+
+model ReviewPhoto {
+  id        String   @id @default(cuid())
+  reviewId  String
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  url       String
+  createdAt DateTime @default(now())
+
+  @@index([reviewId])
+}
