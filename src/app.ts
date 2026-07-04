@@ -3,6 +3,7 @@ import { requireInternalSecret } from "./lib/http";
 import { log } from "./lib/log";
 import { getRequestId, requestLogger } from "./lib/logging";
 import { reviews } from "./routes/reviews";
+import { reports } from "./routes/reports";
 import { account } from "./routes/account";
 import { files } from "./routes/files";
 import { internal } from "./routes/internal";
@@ -14,6 +15,7 @@ app.get("/healthz", (c) => c.json({ ok: true, service: "review-service" }));
 app.use("*", requireInternalSecret);
 
 app.route("/", reviews);
+app.route("/", reports);
 app.route("/", account);
 app.route("/files", files);
 app.route("/internal", internal);

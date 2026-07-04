@@ -28,6 +28,30 @@ model Review {
   @@index([providerId])
 }
 
+// Abuse reports (#50) on reviews — this service owns reviews, so it owns the
+// reports on them (provider-service has the same-shaped model for providers
+// and work photos). reporterId references a User owned by identity-service
+// (plain string, nullable — anonymous visitors can report). No FK to the
+// target either: a report must survive its target being deleted so admins can
+// still see what happened.
+model Report {
+  id         String  @id @default(cuid())
+  // "REVIEW"
+  targetType String
+  targetId   String
+  reporterId String?
+  // "spam" | "scam" | "offensive" | "fake" | "other" (zod-validated)
+  reason     String
+  details    String?
+  // "OPEN" | "RESOLVED" | "DISMISSED"
+  status     String   @default("OPEN")
+  createdAt  DateTime @default(now())
+
+  // Admin queue reads by status; duplicate-protection looks up by target.
+  @@index([status])
+  @@index([targetType, targetId])
+}
+
 model ReviewPhoto {
   id        String   @id @default(cuid())
   reviewId  String
