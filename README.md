@@ -17,7 +17,9 @@ Public (via gateway):
   existence checked S2S against provider-service.
 - `DELETE /api/reviews/photos/:id` — review author or admin.
 - `DELETE /api/admin/reviews/:id` — admin only.
-- `GET /files/*` — locally stored uploads (gateway path `/api/files/review/*`).
+
+Review-photo bytes are owned by **media-service** and resolve through the
+gateway at `/api/files/review/*`; this service no longer serves files itself.
 
 Internal (S2S):
 
@@ -41,5 +43,7 @@ npm run dev
 
 Checks: `npm run typecheck`, `npm test`, `npm run build`.
 
-Uploads go to Vercel Blob when `BLOB_READ_WRITE_TOKEN` is set, otherwise to
-`$UPLOAD_DIR` (default `./data/uploads`) and are served via `GET /files/*`.
+Review photos (up to 3 per review) are forwarded to **media-service** over S2S
+via `lib/storage.ts` (`storeImage("review", …)`); media does the sharp
+re-encode/EXIF-strip, stores the bytes, and serves them. Set `MEDIA_SERVICE_URL`
+(default `http://localhost:4006`).
