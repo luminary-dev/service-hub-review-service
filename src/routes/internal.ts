@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { db } from "../db";
 import { listProviderReviews, normalizeTake } from "../lib/provider-reviews";
 import { aggregateRatings } from "../lib/ratings";
+import { sweepOrphans } from "../lib/orphans";
 import { removeStoredFile } from "../lib/storage";
 
 export const internal = new Hono();
@@ -40,6 +41,15 @@ internal.get("/by-provider/:id", async (c) => {
 internal.get("/count", async (c) => {
   const count = await db.review.count();
   return c.json({ count });
+});
+
+// Periodic maintenance (#36): remove stored review-photo files no database
+// row references any more. Grace window protects in-flight uploads; run it
+// from ops tooling (cron/curl with the internal secret).
+internal.post("/maintenance/sweep-orphans", async (c) => {
+  const photos = await db.reviewPhoto.findMany({ select: { url: true } });
+  const result = await sweepOrphans(new Set(photos.map((p) => p.url)));
+  return c.json(result);
 });
 
 // POST /internal/users/:id/erase — account-deletion fan-out from

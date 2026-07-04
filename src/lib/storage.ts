@@ -13,8 +13,8 @@ import { put, del } from "@vercel/blob";
 export const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5MB
 export const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./data/uploads";
-const SERVICE_FILE_PREFIX = "review";
+export const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./data/uploads";
+export const SERVICE_FILE_PREFIX = "review";
 
 export function validateImage(file: File): string | null {
   if (!ALLOWED_IMAGE_TYPES.has(file.type)) {

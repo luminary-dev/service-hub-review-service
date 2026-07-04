@@ -167,14 +167,22 @@ reviews.delete("/api/reviews/photos/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// Port of the monolith's DELETE /api/admin/reviews/[id]. Matches the monolith
-// exactly: plain deleteMany (photo rows cascade in the DB; no file cleanup).
+// Port of the monolith's DELETE /api/admin/reviews/[id] — now also removes
+// the stored photo files (the monolith leaked them; photo ROWS cascade but
+// files never did, #36).
 reviews.delete("/api/admin/reviews/:id", async (c) => {
   const auth = getAuth(c);
   if (auth?.role !== "ADMIN") {
     return c.json({ error: "Forbidden" }, 403);
   }
   const id = c.req.param("id");
+  const photos = await db.reviewPhoto.findMany({
+    where: { reviewId: id },
+    select: { url: true },
+  });
   await db.review.deleteMany({ where: { id } });
+  for (const p of photos) {
+    await removeStoredFile(p.url);
+  }
   return c.json({ ok: true });
 });
