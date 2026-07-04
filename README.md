@@ -1,5 +1,8 @@
 # review-service
 
+> [!WARNING]
+> This repository is a **read-only mirror** of [`services/review-service`](https://github.com/luminary-dev/service-hub/tree/main/services/review-service) in the service-hub monorepo. Do not push or open PRs here — changes land via monorepo PRs and are synced out with `npm run sync:repos`. Direct pushes are blocked by branch protection.
+
 Owns reviews and review photos for Service Hub (port `4003`, database
 `review_db`). Part of the microservice split described in
 `docs/ARCHITECTURE.md` — reached only through the api-gateway; every request
