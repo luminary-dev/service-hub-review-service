@@ -44,13 +44,16 @@ export async function s2s(
   path: string,
   init: RequestInit = {}
 ): Promise<Response> {
+  // FormData bodies (file uploads) must keep the multipart content-type +
+  // boundary fetch sets for them, and need a longer budget for processing.
+  const isForm = init.body instanceof FormData;
   return fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
-      "content-type": "application/json",
+      ...(isForm ? {} : { "content-type": "application/json" }),
       ...(init.headers ?? {}),
       "x-internal-secret": INTERNAL_SECRET,
     },
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(isForm ? 15000 : 5000),
   });
 }

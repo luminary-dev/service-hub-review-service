@@ -1,22 +1,24 @@
-// Canonical src/lib/storage.ts for services that accept uploads
-// (provider-service, review-service). Port of the monolith's src/lib/upload.ts
-// with the local-disk fallback moved from Next's public/ dir to $UPLOAD_DIR,
-// served back via GET /files/* through the gateway.
-//
-// SERVICE_FILE_PREFIX below must be "provider" or "review" to match the
-// gateway routes /api/files/provider/* and /api/files/review/*.
-import { mkdir, writeFile, unlink } from "fs/promises";
-import path from "path";
-import crypto from "crypto";
-import { put, del } from "@vercel/blob";
-import sharp from "sharp";
+// Thin media-service client (image processing/storage extracted to
+// media-service). Canonical shared module — provider-service and
+// review-service keep identical copies; the calling service passes its own
+// namespace, so the file itself is byte-identical.
+import { s2s } from "./http";
+
+const MEDIA_SERVICE_URL =
+  process.env.MEDIA_SERVICE_URL ?? "http://localhost:4006";
 
 export const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5MB
-export const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+export const ALLOWED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
-export const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./data/uploads";
-export const SERVICE_FILE_PREFIX = "review";
+// A payload media-service could not decode as a real image — routes translate
+// it into a 400.
+export class InvalidImageError extends Error {}
 
+// Cheap client-side pre-check (media re-validates by actually decoding).
 export function validateImage(file: File): string | null {
   if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
     return "Only JPEG, PNG or WebP images are allowed";
@@ -27,79 +29,65 @@ export function validateImage(file: File): string | null {
   return null;
 }
 
-
-// Decode-and-re-encode with sharp (#19/#132/#140): proves the payload really
-// is an image in the claimed family (a polyglot or mislabeled file fails to
-// decode), applies the EXIF orientation, and drops ALL metadata — EXIF GPS
-// coordinates in tradespeople's phone photos would otherwise leak home
-// locations. Returns null for anything that is not a decodable JPEG/PNG/WebP.
-export class InvalidImageError extends Error {}
-
-export async function processImage(
-  input: Buffer
-): Promise<{ data: Buffer; ext: string }> {
-  try {
-    const img = sharp(input, { failOn: "error", limitInputPixels: 50_000_000 });
-    const meta = await img.metadata();
-    // rotate() bakes in the EXIF orientation BEFORE metadata is stripped, so
-    // phone photos don't come out sideways.
-    if (meta.format === "jpeg") {
-      return { data: await img.rotate().jpeg({ quality: 85 }).toBuffer(), ext: "jpg" };
-    }
-    if (meta.format === "png") {
-      return { data: await img.rotate().png().toBuffer(), ext: "png" };
-    }
-    if (meta.format === "webp") {
-      return { data: await img.rotate().webp().toBuffer(), ext: "webp" };
-    }
-  } catch {
-    // fall through
+// Uploads a file to media-service under this service's namespace, returning
+// the URL to persist. Throws InvalidImageError on a 400 (non-image); throws
+// on transport/other failure so the write path fails loudly.
+export async function storeImage(
+  namespace: string,
+  file: File,
+  prefix = "uploads"
+): Promise<string> {
+  // Re-serialize into a fresh in-memory Blob: a File pulled from an inbound
+  // request's formData() can't be re-streamed into an outbound multipart body
+  // (undici raises "fetch failed").
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const form = new FormData();
+  form.set("namespace", namespace);
+  form.set("prefix", prefix);
+  form.set(
+    "file",
+    new Blob([bytes], { type: file.type || "application/octet-stream" }),
+    "upload"
+  );
+  const res = await s2s(MEDIA_SERVICE_URL, "/internal/media/store", {
+    method: "POST",
+    body: form,
+  });
+  if (res.status === 400) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new InvalidImageError(data.error ?? "Only JPEG, PNG or WebP images are allowed");
   }
-  throw new InvalidImageError("Only JPEG, PNG or WebP images are allowed");
-}
-
-function extFor(type: string): string {
-  if (type === "image/png") return "png";
-  if (type === "image/webp") return "webp";
-  return "jpg";
-}
-
-// Returns the URL to store in the database: an absolute Vercel Blob URL in
-// production, or a gateway-served /api/files/... path locally.
-export async function storeImage(file: File, prefix = "uploads"): Promise<string> {
-  // Re-encoded content decides the extension — the claimed content-type has
-  // already been checked but is untrusted. Throws InvalidImageError for
-  // payloads that don't decode; callers translate that into a 400.
-  const { data, ext } = await processImage(Buffer.from(await file.arrayBuffer()));
-  const filename = `${crypto.randomUUID()}.${ext}`;
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
-    const blob = await put(`${prefix}/${filename}`, data, { access: "public" });
-    return blob.url;
+  if (!res.ok) {
+    throw new Error(`media-service store responded ${res.status}`);
   }
-  const dir = path.join(UPLOAD_DIR, prefix);
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, filename), data);
-  return `/api/files/${SERVICE_FILE_PREFIX}/${prefix}/${filename}`;
+  const data = (await res.json()) as { url: string };
+  return data.url;
 }
 
-// Best-effort deletion, mirroring the monolith (errors swallowed).
+// Best-effort deletion via media-service (errors swallowed).
 export async function removeStoredFile(url: string): Promise<void> {
   try {
-    if (url.startsWith(`/api/files/${SERVICE_FILE_PREFIX}/`)) {
-      const rel = url.slice(`/api/files/${SERVICE_FILE_PREFIX}/`.length);
-      await unlink(path.join(UPLOAD_DIR, path.normalize(rel)));
-    } else if (url.startsWith("http") && process.env.BLOB_READ_WRITE_TOKEN) {
-      await del(url);
-    }
+    await s2s(MEDIA_SERVICE_URL, "/internal/media/delete", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
   } catch {
     // best-effort
   }
 }
 
-// GET /files/* handler body: resolve against UPLOAD_DIR, refuse path
-// traversal, content-type by extension (jpg/png/webp), 404 otherwise.
-export function resolveFilePath(wildcardPath: string): string | null {
-  const resolved = path.resolve(UPLOAD_DIR, path.normalize(wildcardPath).replace(/^([/\\])+/, ""));
-  if (!resolved.startsWith(path.resolve(UPLOAD_DIR) + path.sep)) return null;
-  return resolved;
+// Orphan sweep: media-service owns the store, so it lists and deletes; this
+// service owns the rows, so it supplies the referenced URL set.
+export async function sweepMedia(
+  namespace: string,
+  referenced: string[]
+): Promise<{ scanned: number; removed: number }> {
+  const res = await s2s(MEDIA_SERVICE_URL, "/internal/media/sweep", {
+    method: "POST",
+    body: JSON.stringify({ namespace, referenced }),
+  });
+  if (!res.ok) {
+    throw new Error(`media-service sweep responded ${res.status}`);
+  }
+  return (await res.json()) as { scanned: number; removed: number };
 }

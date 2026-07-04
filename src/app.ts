@@ -5,7 +5,6 @@ import { getRequestId, requestLogger } from "./lib/logging";
 import { reviews } from "./routes/reviews";
 import { reports } from "./routes/reports";
 import { account } from "./routes/account";
-import { files } from "./routes/files";
 import { internal } from "./routes/internal";
 
 export const app = new Hono();
@@ -17,7 +16,6 @@ app.use("*", requireInternalSecret);
 app.route("/", reviews);
 app.route("/", reports);
 app.route("/", account);
-app.route("/files", files);
 app.route("/internal", internal);
 
 // Fallbacks mirror the monolith's Next.js behavior.

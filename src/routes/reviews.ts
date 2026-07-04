@@ -139,7 +139,7 @@ reviews.post("/api/providers/:id/reviews", async (c) => {
       }
       let url: string;
       try {
-        url = await storeImage(file, "reviews");
+        url = await storeImage("review", file, "reviews");
       } catch (e) {
         if (e instanceof InvalidImageError) return c.json({ error: e.message }, 400);
         throw e;
