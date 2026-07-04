@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db";
 import { getAuth, s2s } from "../lib/http";
+import { listProviderReviews, normalizeTake } from "../lib/provider-reviews";
 import { removeStoredFile, storeImage, validateImage } from "../lib/storage";
 import { MAX_REVIEW_PHOTOS, reviewSchema } from "../lib/validation";
 
@@ -31,6 +32,32 @@ async function hasPriorInteraction(
 }
 
 export const reviews = new Hono();
+
+// Public paginated reviews for a profile page's lazy-loading (the gateway's
+// /api/providers/:id/reviews route is method-agnostic, so GET lands here and
+// POST below). Pages default to 10, capped at 100. If the provider-existence
+// check itself fails we still serve — reviews are public read data and a peer
+// outage must not blank them; suspended providers 404 like their profile.
+reviews.get("/api/providers/:id/reviews", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const res = await s2s(PROVIDER_SERVICE_URL, `/internal/providers/${id}/summary`);
+    if (res.ok) {
+      const data = (await res.json()) as { provider: ProviderSummary | null };
+      if (!data.provider || data.provider.suspended) {
+        return c.json({ error: "Provider not found" }, 404);
+      }
+    }
+  } catch {
+    // degrade open
+  }
+
+  const { reviews: page, nextCursor } = await listProviderReviews(id, {
+    take: normalizeTake(c.req.query("take"), 10),
+    cursor: c.req.query("cursor") || undefined,
+  });
+  return c.json({ reviews: page, nextCursor });
+});
 
 // Port of the monolith's POST /api/providers/[id]/reviews (rate limiting now
 // lives in the gateway). Upsert semantics: a user has one review per provider;

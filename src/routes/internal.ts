@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import { db } from "../db";
-import { s2s } from "../lib/http";
+import { listProviderReviews, normalizeTake } from "../lib/provider-reviews";
 import { aggregateRatings } from "../lib/ratings";
-
-const IDENTITY_SERVICE_URL = process.env.IDENTITY_SERVICE_URL ?? "http://localhost:4001";
 
 export const internal = new Hono();
 
@@ -25,46 +23,16 @@ internal.get("/ratings", async (c) => {
   return c.json({ ratings: aggregateRatings(rows) });
 });
 
-// Reviews for one provider (createdAt desc), photos createdAt asc, reviewer
-// names batch-hydrated from identity-service (degrades to "Unknown").
+// Reviews for one provider (createdAt desc, cursor-paginated), photos
+// createdAt asc, reviewer names batch-hydrated from identity-service
+// (degrades to "Unknown"). `nextCursor` is additive — existing consumers
+// keep reading `reviews`.
 internal.get("/by-provider/:id", async (c) => {
-  const id = c.req.param("id");
-  const rows = await db.review.findMany({
-    where: { providerId: id },
-    include: { photos: { orderBy: { createdAt: "asc" } } },
-    orderBy: { createdAt: "desc" },
+  const { reviews, nextCursor } = await listProviderReviews(c.req.param("id"), {
+    take: normalizeTake(c.req.query("take")),
+    cursor: c.req.query("cursor") || undefined,
   });
-
-  const userIds = [...new Set(rows.map((r) => r.userId))];
-  const names = new Map<string, string>();
-  if (userIds.length > 0) {
-    try {
-      const res = await s2s(
-        IDENTITY_SERVICE_URL,
-        `/internal/users?ids=${encodeURIComponent(userIds.join(","))}`
-      );
-      if (res.ok) {
-        const data = (await res.json()) as { users: { id: string; name: string }[] };
-        for (const u of data.users ?? []) names.set(u.id, u.name);
-      }
-    } catch {
-      // degrade gracefully — reviewer names fall back to "Unknown"
-    }
-  }
-
-  return c.json({
-    reviews: rows.map((r) => ({
-      id: r.id,
-      providerId: r.providerId,
-      userId: r.userId,
-      rating: r.rating,
-      comment: r.comment,
-      verified: r.verified,
-      createdAt: r.createdAt,
-      user: { name: names.get(r.userId) ?? "Unknown" },
-      photos: r.photos.map((p) => ({ id: p.id, url: p.url, createdAt: p.createdAt })),
-    })),
-  });
+  return c.json({ reviews, nextCursor });
 });
 
 // Total review count (home page stats via provider-service).
