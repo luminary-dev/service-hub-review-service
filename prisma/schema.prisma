@@ -18,6 +18,9 @@ model Review {
   // Backed by a real interaction (reviewer had inquired with the provider),
   // checked S2S at write time. Evidence for a badge, not a hard gate.
   verified   Boolean  @default(false)
+  // Moderation soft delete: set by admin removal, cleared by restore. Public
+  // queries filter it; account erasure still hard-deletes regardless.
+  deletedAt  DateTime?
   createdAt  DateTime @default(now())
   photos     ReviewPhoto[]
 

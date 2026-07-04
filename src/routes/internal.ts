@@ -17,7 +17,7 @@ internal.get("/ratings", async (c) => {
   const rows = ids.length
     ? await db.review.groupBy({
         by: ["providerId"],
-        where: { providerId: { in: ids } },
+        where: { providerId: { in: ids }, deletedAt: null },
         _avg: { rating: true },
         _count: { _all: true },
       })
@@ -33,13 +33,15 @@ internal.get("/by-provider/:id", async (c) => {
   const { reviews, nextCursor } = await listProviderReviews(c.req.param("id"), {
     take: normalizeTake(c.req.query("take")),
     cursor: c.req.query("cursor") || undefined,
+    // Admin moderation views need to see (and restore) soft-deleted reviews.
+    includeDeleted: c.req.query("includeDeleted") === "1",
   });
   return c.json({ reviews, nextCursor });
 });
 
 // Total review count (home page stats via provider-service).
 internal.get("/count", async (c) => {
-  const count = await db.review.count();
+  const count = await db.review.count({ where: { deletedAt: null } });
   return c.json({ count });
 });
 

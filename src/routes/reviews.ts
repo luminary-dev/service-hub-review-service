@@ -112,7 +112,9 @@ reviews.post("/api/providers/:id/reviews", async (c) => {
     where: { providerId_userId: { providerId: id, userId: auth.userId } },
     create: { providerId: id, userId: auth.userId, verified, ...parsed.data },
     // On re-review only ever upgrade the badge: a provider-service outage
-    // (verified=false here) must not strip a previously earned one.
+    // (verified=false here) must not strip a previously earned one. deletedAt
+    // is deliberately untouched — editing a moderated review must not
+    // resurrect it (the admin's removal stands until restored).
     update: { ...parsed.data, ...(verified ? { verified } : {}) },
     include: { photos: true },
   });
@@ -167,22 +169,28 @@ reviews.delete("/api/reviews/photos/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// Port of the monolith's DELETE /api/admin/reviews/[id] — now also removes
-// the stored photo files (the monolith leaked them; photo ROWS cascade but
-// files never did, #36).
+// Admin moderation removal is a SOFT delete (#32): the row, photos and files
+// all survive so the action is reversible via the restore endpoint below.
+// Account erasure remains a hard delete regardless.
 reviews.delete("/api/admin/reviews/:id", async (c) => {
   const auth = getAuth(c);
   if (auth?.role !== "ADMIN") {
     return c.json({ error: "Forbidden" }, 403);
   }
   const id = c.req.param("id");
-  const photos = await db.reviewPhoto.findMany({
-    where: { reviewId: id },
-    select: { url: true },
+  await db.review.updateMany({
+    where: { id },
+    data: { deletedAt: new Date() },
   });
-  await db.review.deleteMany({ where: { id } });
-  for (const p of photos) {
-    await removeStoredFile(p.url);
+  return c.json({ ok: true });
+});
+
+reviews.patch("/api/admin/reviews/:id/restore", async (c) => {
+  const auth = getAuth(c);
+  if (auth?.role !== "ADMIN") {
+    return c.json({ error: "Forbidden" }, 403);
   }
+  const id = c.req.param("id");
+  await db.review.updateMany({ where: { id }, data: { deletedAt: null } });
   return c.json({ ok: true });
 });

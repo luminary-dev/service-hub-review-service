@@ -28,6 +28,7 @@ export type ReviewDTO = {
   rating: number;
   comment: string;
   verified: boolean;
+  deletedAt: Date | null;
   createdAt: Date;
   user: { name: string };
   photos: { id: string; url: string; createdAt: Date }[];
@@ -35,7 +36,7 @@ export type ReviewDTO = {
 
 export async function listProviderReviews(
   providerId: string,
-  opts: { take?: number; cursor?: string } = {}
+  opts: { take?: number; cursor?: string; includeDeleted?: boolean } = {}
 ): Promise<{ reviews: ReviewDTO[]; nextCursor: string | null }> {
   const take = opts.take ?? DEFAULT_REVIEWS_TAKE;
 
@@ -43,7 +44,7 @@ export async function listProviderReviews(
   // unique cursor; (createdAt desc, id desc) keeps the order stable when
   // several reviews share a timestamp (seed data does).
   const rows = await db.review.findMany({
-    where: { providerId },
+    where: { providerId, ...(opts.includeDeleted ? {} : { deletedAt: null }) },
     include: { photos: { orderBy: { createdAt: "asc" } } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: take + 1,
@@ -77,6 +78,7 @@ export async function listProviderReviews(
       rating: r.rating,
       comment: r.comment,
       verified: r.verified,
+      deletedAt: r.deletedAt,
       createdAt: r.createdAt,
       user: { name: names.get(r.userId) ?? "Unknown" },
       photos: r.photos.map((p) => ({ id: p.id, url: p.url, createdAt: p.createdAt })),
