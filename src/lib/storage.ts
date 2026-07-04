@@ -9,6 +9,7 @@ import { mkdir, writeFile, unlink } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { put, del } from "@vercel/blob";
+import sharp from "sharp";
 
 export const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5MB
 export const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -26,6 +27,37 @@ export function validateImage(file: File): string | null {
   return null;
 }
 
+
+// Decode-and-re-encode with sharp (#19/#132/#140): proves the payload really
+// is an image in the claimed family (a polyglot or mislabeled file fails to
+// decode), applies the EXIF orientation, and drops ALL metadata — EXIF GPS
+// coordinates in tradespeople's phone photos would otherwise leak home
+// locations. Returns null for anything that is not a decodable JPEG/PNG/WebP.
+export class InvalidImageError extends Error {}
+
+export async function processImage(
+  input: Buffer
+): Promise<{ data: Buffer; ext: string }> {
+  try {
+    const img = sharp(input, { failOn: "error", limitInputPixels: 50_000_000 });
+    const meta = await img.metadata();
+    // rotate() bakes in the EXIF orientation BEFORE metadata is stripped, so
+    // phone photos don't come out sideways.
+    if (meta.format === "jpeg") {
+      return { data: await img.rotate().jpeg({ quality: 85 }).toBuffer(), ext: "jpg" };
+    }
+    if (meta.format === "png") {
+      return { data: await img.rotate().png().toBuffer(), ext: "png" };
+    }
+    if (meta.format === "webp") {
+      return { data: await img.rotate().webp().toBuffer(), ext: "webp" };
+    }
+  } catch {
+    // fall through
+  }
+  throw new InvalidImageError("Only JPEG, PNG or WebP images are allowed");
+}
+
 function extFor(type: string): string {
   if (type === "image/png") return "png";
   if (type === "image/webp") return "webp";
@@ -35,14 +67,18 @@ function extFor(type: string): string {
 // Returns the URL to store in the database: an absolute Vercel Blob URL in
 // production, or a gateway-served /api/files/... path locally.
 export async function storeImage(file: File, prefix = "uploads"): Promise<string> {
-  const filename = `${crypto.randomUUID()}.${extFor(file.type)}`;
+  // Re-encoded content decides the extension — the claimed content-type has
+  // already been checked but is untrusted. Throws InvalidImageError for
+  // payloads that don't decode; callers translate that into a 400.
+  const { data, ext } = await processImage(Buffer.from(await file.arrayBuffer()));
+  const filename = `${crypto.randomUUID()}.${ext}`;
   if (process.env.BLOB_READ_WRITE_TOKEN) {
-    const blob = await put(`${prefix}/${filename}`, file, { access: "public" });
+    const blob = await put(`${prefix}/${filename}`, data, { access: "public" });
     return blob.url;
   }
   const dir = path.join(UPLOAD_DIR, prefix);
   await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, filename), Buffer.from(await file.arrayBuffer()));
+  await writeFile(path.join(dir, filename), data);
   return `/api/files/${SERVICE_FILE_PREFIX}/${prefix}/${filename}`;
 }
 

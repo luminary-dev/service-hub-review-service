@@ -2,7 +2,12 @@ import { Hono } from "hono";
 import { db } from "../db";
 import { getAuth, s2s } from "../lib/http";
 import { listProviderReviews, normalizeTake } from "../lib/provider-reviews";
-import { removeStoredFile, storeImage, validateImage } from "../lib/storage";
+import {
+  InvalidImageError,
+  removeStoredFile,
+  storeImage,
+  validateImage,
+} from "../lib/storage";
 import { MAX_REVIEW_PHOTOS, reviewSchema } from "../lib/validation";
 
 const PROVIDER_SERVICE_URL = process.env.PROVIDER_SERVICE_URL ?? "http://localhost:4002";
@@ -132,7 +137,13 @@ reviews.post("/api/providers/:id/reviews", async (c) => {
       if (check) {
         return c.json({ error: check }, 400);
       }
-      const url = await storeImage(file, "reviews");
+      let url: string;
+      try {
+        url = await storeImage(file, "reviews");
+      } catch (e) {
+        if (e instanceof InvalidImageError) return c.json({ error: e.message }, 400);
+        throw e;
+      }
       await db.reviewPhoto.create({ data: { reviewId: review.id, url } });
     }
   }
