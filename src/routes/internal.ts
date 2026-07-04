@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { db } from "../db";
 import { listProviderReviews, normalizeTake } from "../lib/provider-reviews";
 import { aggregateRatings } from "../lib/ratings";
+import { removeStoredFile } from "../lib/storage";
 
 export const internal = new Hono();
 
@@ -39,4 +40,21 @@ internal.get("/by-provider/:id", async (c) => {
 internal.get("/count", async (c) => {
   const count = await db.review.count();
   return c.json({ count });
+});
+
+// POST /internal/users/:id/erase — account-deletion fan-out from
+// identity-service. Deletes the user's reviews (photo rows cascade) and their
+// stored photo files (best-effort — removeStoredFile swallows errors).
+// Idempotent: erasing an unknown user is a no-op 200.
+internal.post("/users/:id/erase", async (c) => {
+  const userId = c.req.param("id");
+  const photos = await db.reviewPhoto.findMany({
+    where: { review: { userId } },
+    select: { url: true },
+  });
+  await db.review.deleteMany({ where: { userId } });
+  for (const p of photos) {
+    await removeStoredFile(p.url);
+  }
+  return c.json({ ok: true });
 });
