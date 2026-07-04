@@ -8,6 +8,28 @@ const PROVIDER_SERVICE_URL = process.env.PROVIDER_SERVICE_URL ?? "http://localho
 
 type ProviderSummary = { id: string; userId: string; suspended: boolean };
 
+// Verified badge: the review is backed by a real interaction if the reviewer
+// previously sent this provider an inquiry through the platform. Evidence,
+// not a hard gate — plenty of real customers call the provider directly using
+// the public phone number — and a peer outage must not block reviews, so
+// failures degrade to unverified.
+async function hasPriorInteraction(
+  providerId: string,
+  userId: string
+): Promise<boolean> {
+  try {
+    const res = await s2s(
+      PROVIDER_SERVICE_URL,
+      `/internal/inquiries/exists?providerId=${encodeURIComponent(providerId)}&userId=${encodeURIComponent(userId)}`
+    );
+    if (!res.ok) return false;
+    const data = (await res.json()) as { exists?: boolean };
+    return data.exists === true;
+  } catch {
+    return false;
+  }
+}
+
 export const reviews = new Hono();
 
 // Port of the monolith's POST /api/providers/[id]/reviews (rate limiting now
@@ -57,10 +79,14 @@ reviews.post("/api/providers/:id/reviews", async (c) => {
     .getAll("photos")
     .filter((f): f is File => f instanceof File && f.size > 0);
 
+  const verified = await hasPriorInteraction(id, auth.userId);
+
   const review = await db.review.upsert({
     where: { providerId_userId: { providerId: id, userId: auth.userId } },
-    create: { providerId: id, userId: auth.userId, ...parsed.data },
-    update: parsed.data,
+    create: { providerId: id, userId: auth.userId, verified, ...parsed.data },
+    // On re-review only ever upgrade the badge: a provider-service outage
+    // (verified=false here) must not strip a previously earned one.
+    update: { ...parsed.data, ...(verified ? { verified } : {}) },
     include: { photos: true },
   });
 

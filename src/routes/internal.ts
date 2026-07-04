@@ -59,6 +59,7 @@ internal.get("/by-provider/:id", async (c) => {
       userId: r.userId,
       rating: r.rating,
       comment: r.comment,
+      verified: r.verified,
       createdAt: r.createdAt,
       user: { name: names.get(r.userId) ?? "Unknown" },
       photos: r.photos.map((p) => ({ id: p.id, url: p.url, createdAt: p.createdAt })),

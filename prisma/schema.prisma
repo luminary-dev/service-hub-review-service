@@ -15,6 +15,9 @@ model Review {
   userId     String
   rating     Int
   comment    String
+  // Backed by a real interaction (reviewer had inquired with the provider),
+  // checked S2S at write time. Evidence for a badge, not a hard gate.
+  verified   Boolean  @default(false)
   createdAt  DateTime @default(now())
   photos     ReviewPhoto[]
 
