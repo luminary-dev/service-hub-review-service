@@ -91,6 +91,12 @@ reviews.post("/api/providers/:id/reviews", async (c) => {
   if (!provider) {
     return c.json({ error: "Provider not found" }, 404);
   }
+  // A suspended provider's profile 404s (see the GET path); reviews must not be
+  // creatable against it either — otherwise ratings keep accruing on a removed
+  // provider and can even earn a `verified` badge.
+  if (provider.suspended) {
+    return c.json({ error: "Provider not found" }, 404);
+  }
   if (provider.userId === auth.userId) {
     return c.json({ error: "You cannot review your own profile" }, 400);
   }
