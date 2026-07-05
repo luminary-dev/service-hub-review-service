@@ -119,19 +119,16 @@ reviews.post("/api/providers/:id/reviews", async (c) => {
 
   const verified = await hasPriorInteraction(id, auth.userId);
 
-  const review = await db.review.upsert({
-    where: { providerId_userId: { providerId: id, userId: auth.userId } },
-    create: { providerId: id, userId: auth.userId, verified, ...parsed.data },
-    // On re-review only ever upgrade the badge: a provider-service outage
-    // (verified=false here) must not strip a previously earned one. deletedAt
-    // is deliberately untouched — editing a moderated review must not
-    // resurrect it (the admin's removal stands until restored).
-    update: { ...parsed.data, ...(verified ? { verified } : {}) },
-    include: { photos: true },
-  });
-
+  // Validate and upload photos BEFORE mutating the review, so a rejected photo
+  // batch (over the cap, or one media rejects) can't leave the rating/comment
+  // already persisted.
+  const photoUrls: string[] = [];
   if (files.length > 0) {
-    const remaining = MAX_REVIEW_PHOTOS - review.photos.length;
+    const existing = await db.review.findUnique({
+      where: { providerId_userId: { providerId: id, userId: auth.userId } },
+      select: { _count: { select: { photos: true } } },
+    });
+    const remaining = MAX_REVIEW_PHOTOS - (existing?._count.photos ?? 0);
     if (files.length > remaining) {
       return c.json(
         { error: `A review can have at most ${MAX_REVIEW_PHOTOS} photos.` },
@@ -143,16 +140,34 @@ reviews.post("/api/providers/:id/reviews", async (c) => {
       if (check) {
         return c.json({ error: check }, 400);
       }
-      let url: string;
+    }
+    for (const file of files) {
       try {
-        url = await storeImage("review", file, "reviews");
+        photoUrls.push(await storeImage("review", file, "reviews"));
       } catch (e) {
         if (e instanceof InvalidImageError) return c.json({ error: e.message }, 400);
         throw e;
       }
-      await db.reviewPhoto.create({ data: { reviewId: review.id, url } });
     }
   }
+
+  await db.$transaction(async (tx) => {
+    const review = await tx.review.upsert({
+      where: { providerId_userId: { providerId: id, userId: auth.userId } },
+      create: { providerId: id, userId: auth.userId, verified, ...parsed.data },
+      // On re-review only ever upgrade the badge: a provider-service outage
+      // (verified=false here) must not strip a previously earned one. deletedAt
+      // is deliberately untouched — editing a moderated review must not
+      // resurrect it (the admin's removal stands until restored).
+      update: { ...parsed.data, ...(verified ? { verified } : {}) },
+      select: { id: true },
+    });
+    if (photoUrls.length > 0) {
+      await tx.reviewPhoto.createMany({
+        data: photoUrls.map((url) => ({ reviewId: review.id, url })),
+      });
+    }
+  });
 
   return c.json({ ok: true });
 });
