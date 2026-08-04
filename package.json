@@ -24,7 +24,7 @@
     "@prisma/adapter-pg": "7.8.0",
     "@prisma/client": "7.8.0",
     "@vercel/blob": "^2.5.0",
-    "hono": "^4.12.0",
+    "hono": "^4.13.0",
     "pg": "8.22.0",
     "sharp": "^0.35.3",
     "zod": "^4.4.3"
